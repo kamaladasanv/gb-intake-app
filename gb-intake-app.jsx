@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import logo from "./gb-logo.png";
+import { supabase } from "./supabase";
 
 // ─── Golden Butterflies Brand Colors ────────────────────────────────────────
 const GB = {
@@ -126,9 +127,7 @@ const CSS = `
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const uid = () => `GB-${Date.now().toString(36).toUpperCase()}`;
 const today = () => new Date().toISOString().split("T")[0];
-const STORAGE_KEY = "gb_patients_v1";
-const load = () => { try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch { return []; } };
-const save = (d) => { try { localStorage.setItem(STORAGE_KEY, JSON.stringify(d)); } catch { } };
+// STORAGE_KEY and local load/save removed in favor of Supabase Cloud Sync
 
 // ─── Empty Form ───────────────────────────────────────────────────────────────
 const emptyForm = () => ({
@@ -280,21 +279,86 @@ const SectionCard = ({ icon, title, children }) => (
 
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function GBApp() {
+  const [session, setSession] = useState(null);
+  const [profile, setProfile] = useState(null);
   const [currentRole, setCurrentRole] = useState(null);
-  const [view, setView] = useState(currentRole ? "home" : "roleSelect"); // roleSelect | home | form | records | viewRecord
+  const [view, setView] = useState("loading"); // loading | login | home | form | records | viewRecord
   const [step, setStep] = useState(0);
   const [form, setForm] = useState(emptyForm());
-  const [records, setRecords] = useState(load());
+  const [records, setRecords] = useState([]);
   const [toast, setToast] = useState("");
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [completedSteps, setCompletedSteps] = useState([]);
 
   useEffect(() => {
+    // 1. Initial Style Injection
     const s = document.createElement("style");
     s.textContent = CSS;
     document.head.appendChild(s);
-    return () => document.head.removeChild(s);
+
+    // 2. Auth Listener
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      if (session) fetchProfile(session.user.id);
+      else setView("login");
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      if (session) fetchProfile(session.user.id);
+      else setView("login");
+    });
+
+    return () => {
+      document.head.removeChild(s);
+      subscription.unsubscribe();
+    };
   }, []);
+
+  const fetchProfile = async (userId) => {
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("*")
+      .eq("id", userId)
+      .single();
+
+    if (data) {
+      setProfile(data);
+      setCurrentRole(data.role);
+      setView("home");
+      fetchRecords();
+    } else {
+      // If no profile exists yet (first login), create one or ask to setup
+      // For this app, we'll assume admins manage this, or we auto-create a default
+      // But for now, let's just set a default role so they can use it
+      setCurrentRole("nurse");
+      setView("home");
+      fetchRecords();
+    }
+  };
+
+  const fetchRecords = async () => {
+    const { data, error } = await supabase
+      .from("patients")
+      .select(`
+        *,
+        records (form_json)
+      `)
+      .order('created_at', { ascending: false });
+
+    if (data) {
+      const formatted = data.map(p => ({
+        ...p.records[0]?.form_json,
+        gbUid: p.gb_uid,
+        childName: p.child_name, // Sync core fields
+        childAge: p.age,
+        childSex: p.sex,
+        enrollDate: p.enrollment_date,
+        db_id: p.id // Keep DB ID for updates
+      }));
+      setRecords(formatted);
+    }
+  };
 
   const showToast = (msg) => {
     setToast(msg);
@@ -345,13 +409,46 @@ export default function GBApp() {
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     markStepDone();
-    const rec = { ...form, savedAt: new Date().toLocaleString("en-IN") };
-    const updated = [...records.filter(r => r.gbUid !== rec.gbUid), rec];
-    setRecords(updated);
-    save(updated);
-    showToast("✓ Record saved successfully!");
+    showToast("Saving to cloud...");
+
+    // 1. Upsert Patient Identity
+    const { data: pData, error: pError } = await supabase
+      .from("patients")
+      .upsert({
+        gb_uid: form.gbUid,
+        child_name: form.childName,
+        age: form.childAge || null,
+        sex: form.childSex || null,
+        enrollment_date: form.enrollDate,
+        created_by: session.user.id
+      }, { onConflict: 'gb_uid' })
+      .select()
+      .single();
+
+    if (pError) {
+      showToast("Error saving patient identity: " + pError.message);
+      return;
+    }
+
+    // 2. Upsert Form Data (Record)
+    const { error: rError } = await supabase
+      .from("records")
+      .upsert({
+        patient_id: pData.id,
+        form_json: form,
+        last_updated_by: session.user.id,
+        last_updated_at: new Date().toISOString()
+      }, { onConflict: 'patient_id' });
+
+    if (rError) {
+      showToast("Error saving record data: " + rError.message);
+      return;
+    }
+
+    fetchRecords(); // Refresh list
+    showToast("✓ Saved to cloud!");
   };
 
   const handleFinalSubmit = () => {
@@ -372,70 +469,48 @@ export default function GBApp() {
     a.click();
   };
 
-  // ── ROLE SELECT ────────────────────────────────────────────────────────────
-  if (view === "roleSelect") return (
+  // ── LOADING ───────────────────────────────────────────────────────────────
+  if (view === "loading") return (
+    <div style={{ minHeight: "100vh", background: GB.purpleDark, display: "flex", alignItems: "center", justifyContent: "center", color: "white" }}>
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: 40, marginBottom: 20 }}>🦋</div>
+        <div style={{ fontSize: 14, letterSpacing: 2 }}>LOADING...</div>
+      </div>
+    </div>
+  );
+
+  // ── AUTH / LOGIN ──────────────────────────────────────────────────────────
+  if (view === "login") return (
     <div style={{
       minHeight: "100vh",
       background: `linear-gradient(160deg, ${GB.purpleDark} 0%, ${GB.purple} 40%, ${GB.gold}40 100%)`,
-      display: "flex",
-      flexDirection: "column",
-      alignItems: "center",
-      justifyContent: "center",
-      padding: 24,
-      position: "relative",
-      overflow: "hidden",
+      display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 24
     }}>
-      <div style={{ position: "absolute", top: -80, right: -80, width: 300, height: 300, borderRadius: "50%", background: `radial-gradient(circle, ${GB.gold}30, transparent 70%)`, pointerEvents: "none" }} />
-      <div style={{ position: "absolute", bottom: -60, left: -60, width: 280, height: 280, borderRadius: "50%", background: `radial-gradient(circle, rgba(255,255,255,0.08), transparent 70%)`, pointerEvents: "none" }} />
-
-      <div style={{
-        width: "100%", maxWidth: 420,
-        background: "rgba(255,255,255,0.08)",
-        backdropFilter: "blur(24px)",
-        borderRadius: 28,
-        border: "1px solid rgba(255,255,255,0.2)",
-        boxShadow: "0 8px 48px rgba(0,0,0,0.25)",
-        padding: "44px 36px 40px",
-        textAlign: "center",
-        position: "relative",
-        zIndex: 1,
-      }}>
-        <div style={{ display: "flex", justifyContent: "center", marginBottom: 20 }}>
-          <div style={{ background: "white", borderRadius: 16, padding: "12px 24px", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-            <img src={logo} alt="Golden Butterflies - Children's Palliative Care Foundation" style={{ maxWidth: 280, width: "100%", height: "auto" }} />
-          </div>
-        </div>
-        <div style={{ fontSize: 11, color: GB.goldLight, fontWeight: 700, letterSpacing: "2px", textTransform: "uppercase", marginBottom: 20 }}>
-          Patient Intake System
-        </div>
-
-        <div style={{ height: 1, background: "linear-gradient(90deg, transparent, rgba(255,255,255,0.25), transparent)", margin: "24px 0" }} />
-
-        <div style={{ fontSize: 14, color: "rgba(255,255,255,0.75)", marginBottom: 20, fontWeight: 600 }}>
-          Select Your Role
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-          {Object.entries(ROLE_CONFIG).map(([roleKey, config]) => (
-            <button key={roleKey} onClick={() => { setCurrentRole(roleKey); setView("home"); }} style={{
-              width: "100%", background: "rgba(255,255,255,0.12)", border: "1.5px solid rgba(255,255,255,0.25)",
-              borderRadius: 14, padding: "16px 20px", cursor: "pointer", transition: "all 0.2s",
-              display: "flex", alignItems: "center", gap: 14, textAlign: "left",
-            }}
-              onMouseEnter={e => { e.currentTarget.style.background = "rgba(255,255,255,0.2)"; e.currentTarget.style.borderColor = config.color; }}
-              onMouseLeave={e => { e.currentTarget.style.background = "rgba(255,255,255,0.12)"; e.currentTarget.style.borderColor = "rgba(255,255,255,0.25)"; }}>
-              <div style={{ fontSize: 32 }}>{config.icon}</div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 16, fontWeight: 700, color: "white", marginBottom: 2 }}>{config.label}</div>
-                <div style={{ fontSize: 12, color: "rgba(255,255,255,0.65)" }}>{config.desc}</div>
-              </div>
-              <div style={{ fontSize: 20, color: "rgba(255,255,255,0.4)" }}>→</div>
-            </button>
-          ))}
+      <div style={{ width: "100%", maxWidth: 360, background: "white", borderRadius: 24, padding: 36, textAlign: "center", boxShadow: "0 20px 40px rgba(0,0,0,0.3)" }}>
+        <img src={logo} alt="GB" style={{ width: 140, marginBottom: 24 }} />
+        <h2 style={{ fontFamily: "Cormorant Garamond", color: GB.purple, marginBottom: 24 }}>Team Login</h2>
+        <form onSubmit={async (e) => {
+          e.preventDefault();
+          const email = e.target.email.value;
+          const password = e.target.password.value;
+          const { error } = await supabase.auth.signInWithPassword({ email, password });
+          if (error) alert(error.message);
+        }}>
+          <input name="email" type="email" placeholder="Email" required style={{ width: "100%", padding: 12, borderRadius: 8, border: `1px solid ${GB.border}`, marginBottom: 12 }} />
+          <input name="password" type="password" placeholder="Password" required style={{ width: "100%", padding: 12, borderRadius: 8, border: `1px solid ${GB.border}`, marginBottom: 20 }} />
+          <button className="btn-primary" style={{ width: "100%" }}>Login</button>
+        </form>
+        <div style={{ marginTop: 20, fontSize: 12, color: GB.textLight }}>
+          For NGOs using Golden Butterflies Intake.
+          Contact Leader for account setup.
         </div>
       </div>
     </div>
   );
+
+  // ── ROLE SELECT (REMOVED: Now inferred from profile) ───────────────────────
+  // if (view === "roleSelect") ... (code removed)
+
 
   // ── HOME SCREEN ────────────────────────────────────────────────────────────
   if (view === "home") return (
@@ -536,8 +611,8 @@ export default function GBApp() {
           </button>
         </div>
 
-        <div style={{ marginTop: 22, fontSize: 11, color: "rgba(255,255,255,0.35)" }}>
-          🔒 All data stored locally on this device
+        <div style={{ marginTop: 22, fontSize: 11, color: "rgba(255,255,255,0.35)", cursor: "pointer" }} onClick={() => supabase.auth.signOut()}>
+          🔒 Logged in as: {session?.user?.email} (Logout)
         </div>
       </div>
 
