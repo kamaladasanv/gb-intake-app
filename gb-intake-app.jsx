@@ -401,7 +401,7 @@ export default function GBApp() {
       }}>
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 20 }}>
           <div style={{ background: "white", borderRadius: 16, padding: "12px 24px", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-            <img src="/gb-logo.png" alt="Golden Butterflies - Children's Palliative Care Foundation" style={{ maxWidth: 280, width: "100%", height: "auto" }} />
+            <img src="./gb-logo.png" alt="Golden Butterflies - Children's Palliative Care Foundation" style={{ maxWidth: 280, width: "100%", height: "auto" }} />
           </div>
         </div>
         <div style={{ fontSize: 11, color: GB.goldLight, fontWeight: 700, letterSpacing: "2px", textTransform: "uppercase", marginBottom: 20 }}>
@@ -478,7 +478,7 @@ export default function GBApp() {
         {/* GB Logo */}
         <div style={{ display: "flex", justifyContent: "center", marginBottom: 20 }}>
           <div style={{ background: "white", borderRadius: 16, padding: "14px 28px", display: "inline-flex", alignItems: "center", justifyContent: "center" }}>
-            <img src="/gb-logo.png" alt="Golden Butterflies - Children's Palliative Care Foundation" style={{ maxWidth: 320, width: "100%", height: "auto" }} />
+            <img src="./gb-logo.png" alt="Golden Butterflies - Children's Palliative Care Foundation" style={{ maxWidth: 320, width: "100%", height: "auto" }} />
           </div>
         </div>
 
@@ -631,7 +631,7 @@ export default function GBApp() {
       <div className="no-print" style={{ background: `linear-gradient(135deg, ${GB.purpleDark}, ${GB.purple})`, padding: "14px 20px", display: "flex", justifyContent: "space-between", alignItems: "center", position: "sticky", top: 0, zIndex: 100, boxShadow: `0 4px 20px ${GB.purpleDark}60` }}>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <div style={{ background: "white", borderRadius: 8, padding: "4px 12px", display: "inline-flex", alignItems: "center" }}>
-            <img src="/gb-logo.png" alt="Golden Butterflies" style={{ height: 30, width: "auto" }} />
+            <img src="./gb-logo.png" alt="Golden Butterflies" style={{ height: 30, width: "auto" }} />
           </div>
         </div>
         <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
