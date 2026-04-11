@@ -25,7 +25,9 @@ const GB = {
 const ROLES = {
   NURSE: "nurse",
   SOCIAL_WORKER: "social_worker",
-  PSYCHOLOGIST: "psychologist",
+  PSYCHIATRIST: "psychiatrist",
+  DOCTOR: "doctor",
+  ADMIN: "admin"
 };
 
 const ROLE_CONFIG = {
@@ -34,22 +36,36 @@ const ROLE_CONFIG = {
     icon: "👩‍⚕️",
     color: "#3B82F6",
     desc: "Patient registration & vitals",
-    canEditSteps: [0, 1, 2, 3, 4, 5, 6, 7], // Enrollment through Vitals
+    canEditSteps: [0, 1, 2, 3, 4, 5, 6, 7, 8, 10]
   },
   [ROLES.SOCIAL_WORKER]: {
     label: "Social Worker",
     icon: "👨‍💼",
     color: "#F59E0B",
     desc: "Socio-economic & family assessment",
-    canEditSteps: [8, 10], // Socio-Eco, Assessment
+    canEditSteps: [0, 1, 2, 3, 4, 5, 6, 7, 8, 10]
   },
-  [ROLES.PSYCHOLOGIST]: {
-    label: "Psychologist",
+  [ROLES.PSYCHIATRIST]: {
+    label: "Psychiatrist",
     icon: "🧠",
     color: "#8B5CF6",
     desc: "Psychosocial evaluation",
-    canEditSteps: [9], // Psychosocial only
+    canEditSteps: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
   },
+  [ROLES.DOCTOR]: {
+    label: "Doctor",
+    icon: "🩺",
+    color: "#10B981", 
+    desc: "Medical review & verification",
+    canEditSteps: [0, 1, 2, 3, 4, 5, 6, 7, 8, 10]
+  },
+  [ROLES.ADMIN]: {
+    label: "Admin",
+    icon: "👑",
+    color: "#EF4444", 
+    desc: "Full system access",
+    canEditSteps: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
+  }
 };
 
 // ─── CSS Injection ────────────────────────────────────────────────────────────
@@ -131,6 +147,7 @@ const today = () => new Date().toISOString().split("T")[0];
 
 // ─── Empty Form ───────────────────────────────────────────────────────────────
 const emptyForm = () => ({
+  status: "draft",
   gbUid: uid(),
   // Page 1 - Enrollment
   enrollDate: today(),
@@ -237,36 +254,6 @@ const STEPS = [
 ];
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
-const Checkbox = ({ checked, onChange, label }) => (
-  <div className="cb-row" onClick={onChange}>
-    <div className={`cb-box ${checked ? "checked" : ""}`} />
-    <span style={{ fontSize: 13, color: checked ? GB.purple : GB.textMid }}>{label}</span>
-  </div>
-);
-
-const Radio = ({ checked, onChange, label }) => (
-  <div className="radio-row" onClick={onChange}>
-    <div className={`radio-dot ${checked ? "checked" : ""}`} />
-    <span style={{ fontSize: 13, color: checked ? GB.purple : GB.textMid }}>{label}</span>
-  </div>
-);
-
-const Field = ({ label, value, onChange, type = "text", placeholder = "", rows, options, span2, span3 }) => (
-  <div className="field-group" style={span2 ? { gridColumn: "span 2" } : span3 ? { gridColumn: "span 3" } : {}}>
-    <label className="field-label">{label}</label>
-    {options ? (
-      <select className="field-select" value={value} onChange={e => onChange(e.target.value)}>
-        <option value="">— Select —</option>
-        {options.map(o => <option key={o} value={o}>{o}</option>)}
-      </select>
-    ) : rows ? (
-      <textarea className="field-textarea" rows={rows} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} />
-    ) : (
-      <input className="field-input" type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} />
-    )}
-  </div>
-);
-
 const SectionCard = ({ icon, title, children }) => (
   <div className="section-card">
     <div className="section-header">
@@ -282,10 +269,11 @@ export default function GBApp() {
   const [session, setSession] = useState(null);
   const [profile, setProfile] = useState(null);
   const [currentRole, setCurrentRole] = useState(null);
-  const [view, setView] = useState("loading"); // loading | login | home | form | records | viewRecord
+  const [view, setView] = useState("loading"); // loading | login | home | form | records | viewRecord | admin
   const [step, setStep] = useState(0);
   const [form, setForm] = useState(emptyForm());
   const [records, setRecords] = useState([]);
+  const [allProfiles, setAllProfiles] = useState([]);
   const [toast, setToast] = useState("");
   const [selectedRecord, setSelectedRecord] = useState(null);
   const [completedSteps, setCompletedSteps] = useState([]);
@@ -316,6 +304,9 @@ export default function GBApp() {
   }, []);
 
   const fetchProfile = async (userId) => {
+    const { data: { session } } = await supabase.auth.getSession();
+    const email = session?.user?.email || null;
+
     const { data, error } = await supabase
       .from("profiles")
       .select("*")
@@ -323,15 +314,16 @@ export default function GBApp() {
       .single();
 
     if (data) {
+      if (!data.email && email) {
+        await supabase.from("profiles").update({ email }).eq("id", userId);
+      }
       setProfile(data);
       setCurrentRole(data.role);
       setView("home");
       fetchRecords();
     } else {
-      // If no profile exists yet (first login), create one or ask to setup
-      // For this app, we'll assume admins manage this, or we auto-create a default
-      // But for now, let's just set a default role so they can use it
-      setCurrentRole("nurse");
+      await supabase.from("profiles").upsert({ id: userId, role: "admin", email });
+      setCurrentRole("admin"); // Temporary auto-admin for test purposes.
       setView("home");
       fetchRecords();
     }
@@ -360,6 +352,23 @@ export default function GBApp() {
     }
   };
 
+  const fetchAllProfiles = async () => {
+    const { data } = await supabase.from("profiles").select("*");
+    if (data) setAllProfiles(data);
+  };
+
+  const updateRole = async (userId, newRole) => {
+    showToast("Updating role...");
+    const { error } = await supabase.from("profiles").update({ role: newRole }).eq("id", userId);
+    if (!error) {
+      if (session && userId === session.user?.id) setCurrentRole(newRole);
+      fetchAllProfiles();
+      showToast("Role updated!");
+    } else {
+      showToast("Error updating role");
+    }
+  };
+
   const showToast = (msg) => {
     setToast(msg);
     setTimeout(() => setToast(""), 3000);
@@ -368,13 +377,48 @@ export default function GBApp() {
   // Role-based access checks
   const canEditStep = (stepId) => {
     if (!currentRole) return false;
-    return ROLE_CONFIG[currentRole].canEditSteps.includes(stepId);
+    if (currentRole === ROLES.ADMIN) return true;
+    if (form.status === "completed") return false;
+    
+    if (form.status === "pending_psychiatrist") {
+      if (currentRole === ROLES.PSYCHIATRIST && stepId === 9) return true;
+      return false;
+    }
+    
+    return ROLE_CONFIG[currentRole]?.canEditSteps.includes(stepId) || false;
   };
+  
+  const isEditable = canEditStep(step);
 
-  const canViewStep = (stepId) => {
-    if (!currentRole) return false;
-    return ROLE_CONFIG[currentRole].canEditSteps.includes(stepId);
-  };
+  const Checkbox = ({ checked, onChange, label }) => (
+    <div className="cb-row" onClick={isEditable ? onChange : undefined} style={{ opacity: isEditable ? 1 : 0.6, cursor: isEditable ? "pointer" : "not-allowed" }}>
+      <div className={`cb-box ${checked ? "checked" : ""}`} />
+      <span style={{ fontSize: 13, color: checked ? GB.purple : GB.textMid }}>{label}</span>
+    </div>
+  );
+
+  const Radio = ({ checked, onChange, label }) => (
+    <div className="radio-row" onClick={isEditable ? onChange : undefined} style={{ opacity: isEditable ? 1 : 0.6, cursor: isEditable ? "pointer" : "not-allowed" }}>
+      <div className={`radio-dot ${checked ? "checked" : ""}`} />
+      <span style={{ fontSize: 13, color: checked ? GB.purple : GB.textMid }}>{label}</span>
+    </div>
+  );
+
+  const Field = ({ label, value, onChange, type = "text", placeholder = "", rows, options, span2, span3 }) => (
+    <div className="field-group" style={span2 ? { gridColumn: "span 2" } : span3 ? { gridColumn: "span 3" } : {}}>
+      <label className="field-label">{label}</label>
+      {options ? (
+        <select className="field-select" value={value} onChange={e => { if (isEditable) onChange(e.target.value); }} disabled={!isEditable} style={{ cursor: isEditable ? "pointer" : "not-allowed", opacity: isEditable ? 1 : 0.7 }}>
+          <option value="">— Select —</option>
+          {options.map(o => <option key={o} value={o}>{o}</option>)}
+        </select>
+      ) : rows ? (
+        <textarea className="field-textarea" rows={rows} value={value} onChange={e => { if (isEditable) onChange(e.target.value); }} placeholder={placeholder} disabled={!isEditable} style={{ cursor: isEditable ? "text" : "not-allowed", opacity: isEditable ? 1 : 0.7 }} />
+      ) : (
+        <input className="field-input" type={type} value={value} onChange={e => { if (isEditable) onChange(e.target.value); }} placeholder={placeholder} disabled={!isEditable} style={{ cursor: isEditable ? "text" : "not-allowed", opacity: isEditable ? 1 : 0.7 }} />
+      )}
+    </div>
+  );
 
   const upd = (field, val) => setForm(f => ({ ...f, [field]: val }));
   const updNested = (parent, field, val) => setForm(f => ({ ...f, [parent]: { ...f[parent], [field]: val } }));
@@ -389,39 +433,33 @@ export default function GBApp() {
   };
 
   const nextStep = () => {
-    markStepDone();
-    // Find next accessible step
-    for (let i = step + 1; i < STEPS.length; i++) {
-      if (canViewStep(i)) {
-        setStep(i);
-        return;
-      }
-    }
+    if (isEditable) markStepDone();
+    if (step < STEPS.length - 1) setStep(step + 1);
   };
 
   const prevStep = () => {
-    // Find previous accessible step
-    for (let i = step - 1; i >= 0; i--) {
-      if (canViewStep(i)) {
-        setStep(i);
-        return;
-      }
-    }
+    if (step > 0) setStep(step - 1);
   };
 
-  const handleSave = async () => {
+  const handleSave = async (isFinal = false, finalStatus = "completed") => {
     markStepDone();
     showToast("Saving to cloud...");
+
+    const formToSave = { ...form };
+    if (isFinal) {
+      formToSave.status = finalStatus;
+      setForm(formToSave);
+    }
 
     // 1. Upsert Patient Identity
     const { data: pData, error: pError } = await supabase
       .from("patients")
       .upsert({
-        gb_uid: form.gbUid,
-        child_name: form.childName,
-        age: form.childAge || null,
-        sex: form.childSex || null,
-        enrollment_date: form.enrollDate,
+        gb_uid: formToSave.gbUid,
+        child_name: formToSave.childName,
+        age: formToSave.childAge || null,
+        sex: formToSave.childSex || null,
+        enrollment_date: formToSave.enrollDate,
         created_by: session.user.id
       }, { onConflict: 'gb_uid' })
       .select()
@@ -437,7 +475,7 @@ export default function GBApp() {
       .from("records")
       .upsert({
         patient_id: pData.id,
-        form_json: form,
+        form_json: formToSave,
         last_updated_by: session.user.id,
         last_updated_at: new Date().toISOString()
       }, { onConflict: 'patient_id' });
@@ -452,8 +490,9 @@ export default function GBApp() {
   };
 
   const handleFinalSubmit = () => {
-    handleSave();
-    showToast("✓ Patient record submitted!");
+    const nextStatus = currentRole === ROLES.PSYCHIATRIST ? "completed" : "pending_psychiatrist";
+    handleSave(true, nextStatus);
+    showToast("✓ Patient record submitted for review!");
     setTimeout(() => { setView("home"); }, 1500);
   };
 
@@ -577,6 +616,13 @@ export default function GBApp() {
 
         {/* Buttons */}
         <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          {currentRole === ROLES.ADMIN && (
+            <button onClick={() => { setView("admin"); fetchAllProfiles(); }} style={{ width: "100%", background: "rgba(255,255,255,0.12)", color: "white", border: "1.5px solid rgba(255,255,255,0.3)", borderRadius: 12, padding: "15px 24px", fontSize: 15, fontWeight: 600, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 8, transition: "all 0.2s" }}>
+              <span>👑</span>
+              <span>Manage Users</span>
+            </button>
+          )}
+
           <button className="btn-gold" onClick={startNew} style={{ width: "100%", fontSize: 15, padding: "17px 24px", letterSpacing: "0.3px" }}>
             ✦ &nbsp; New Patient Record
           </button>
@@ -601,14 +647,7 @@ export default function GBApp() {
               ⬇ &nbsp; Export All Records as CSV
             </button>
           )}
-          <button onClick={() => { setCurrentRole(null); setView("roleSelect"); }} style={{
-            width: "100%", background: "transparent", color: "rgba(255,255,255,0.5)",
-            border: "1px solid rgba(255,255,255,0.15)", borderRadius: 12,
-            padding: "11px 24px", fontSize: 13, fontWeight: 600,
-            cursor: "pointer", fontFamily: "'DM Sans',sans-serif", transition: "all 0.2s",
-          }}>
-            ← Switch Role
-          </button>
+
         </div>
 
         <div style={{ marginTop: 22, fontSize: 11, color: "rgba(255,255,255,0.35)", cursor: "pointer" }} onClick={() => supabase.auth.signOut()}>
@@ -619,6 +658,50 @@ export default function GBApp() {
       <div style={{ marginTop: 24, fontSize: 12, color: "rgba(255,255,255,0.4)", textAlign: "center", zIndex: 1 }}>
         Digitising care, one record at a time
       </div>
+    </div>
+  );
+
+  // ── ADMIN VIEW ─────────────────────────────────────────────────────────────
+  if (view === "admin") return (
+    <div style={{ minHeight: "100vh", background: GB.warmGray, padding: 20 }}>
+      <div style={{ maxWidth: 680, margin: "0 auto" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 24 }}>
+          <div>
+            <div style={{ fontFamily: "'Cormorant Garamond',serif", fontSize: 26, fontWeight: 700, color: GB.purple }}>User Management</div>
+            <div style={{ fontSize: 13, color: GB.textLight }}>Assign roles to your team members</div>
+          </div>
+          <button className="btn-secondary" onClick={() => setView("home")}>← Back to Home</button>
+        </div>
+
+        <div className="section-card">
+          <div className="section-body" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {allProfiles.map(p => (
+              <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "16px", border: `1px solid ${GB.border}`, borderRadius: 8 }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: GB.textDark }}>{p.email || "Pending First Login"}</div>
+                  <div style={{ fontSize: 12, color: GB.textLight, marginTop: 4 }}>ID: {p.id.slice(0, 8)}...</div>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                  {p.id === session?.user?.id && <span style={{ fontSize: 11, background: "#E5E7EB", padding: "2px 6px", borderRadius: 4 }}>You</span>}
+                  <select 
+                    className="field-select" 
+                    value={p.role || "nurse"} 
+                    onChange={e => updateRole(p.id, e.target.value)}
+                    style={{ width: 160, padding: "8px 12px", background: "white" }}
+                  >
+                    {Object.values(ROLES).map(r => (
+                      <option key={r} value={r}>{ROLE_CONFIG[r]?.label || r}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            ))}
+            {allProfiles.length === 0 && <div style={{ textAlign: "center", fontSize: 13, color: GB.textLight }}>No users found.</div>}
+          </div>
+        </div>
+      </div>
+      {/* Toast */}
+      {toast && <div className="toast">{toast}</div>}
     </div>
   );
 
@@ -645,7 +728,11 @@ export default function GBApp() {
           records.map(r => (
             <div key={r.gbUid} className="record-card" onClick={() => { setSelectedRecord(r); setView("viewRecord"); }}>
               <div>
-                <div style={{ fontWeight: 700, color: GB.text, fontSize: 15 }}>{r.childName || "Unnamed Patient"}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <span style={{ fontWeight: 700, color: GB.text, fontSize: 15 }}>{r.childName || "Unnamed Patient"}</span>
+                  {r.status === "completed" && <span style={{ background: GB.success + "15", color: GB.success, borderRadius: 10, padding: "2px 8px", fontSize: 10, fontWeight: 800 }}>✓ COMPLETED</span>}
+                  {r.status === "pending_psychiatrist" && <span style={{ background: "#F59E0B15", color: "#F59E0B", borderRadius: 10, padding: "2px 8px", fontSize: 10, fontWeight: 800 }}>⏳ PENDING PSYCH REVIEW</span>}
+                </div>
                 <div style={{ fontSize: 12, color: GB.textLight, marginTop: 3 }}>
                   {r.gbUid} &nbsp;•&nbsp; {r.illnessDiagnosis || "No diagnosis"} &nbsp;•&nbsp; {r.childAge ? r.childAge + " yrs" : "Age N/A"}
                 </div>
@@ -672,7 +759,9 @@ export default function GBApp() {
         <div style={{ maxWidth: 680, margin: "0 auto" }}>
           <div style={{ display: "flex", gap: 10, marginBottom: 20 }} className="no-print">
             <button className="btn-secondary" onClick={() => setView("records")} style={{ padding: "10px 16px" }}>← Back</button>
-            <button className="btn-secondary" onClick={() => { setForm(r); setCompletedSteps([...Array(STEPS.length).keys()]); setStep(0); setView("form"); }} style={{ padding: "10px 16px" }}>✏️ Edit</button>
+            <button className="btn-secondary" onClick={() => { setForm(r); setCompletedSteps([...Array(STEPS.length).keys()]); setStep(0); setView("form"); }} style={{ padding: "10px 16px" }}>
+              {(r.status === "completed" || (r.status === "pending_psychiatrist" && currentRole !== ROLES.PSYCHIATRIST)) && currentRole !== ROLES.ADMIN ? "👁️ View Form" : "✏️ Edit"}
+            </button>
             <button className="btn-secondary" onClick={() => window.print()} style={{ padding: "10px 16px" }}>🖨️ Print</button>
           </div>
           <div style={{ background: "white", borderRadius: 16, padding: 24, border: `1px solid ${GB.border}`, marginBottom: 16 }}>
@@ -746,8 +835,16 @@ export default function GBApp() {
       {/* Form Content */}
       <div style={{ maxWidth: 760, margin: "0 auto", padding: "20px 16px 100px" }}>
 
-        {/* STEP 0: ENROLLMENT */}
-        {step === 0 && <>
+        {!isEditable && (
+          <div className="no-print" style={{ background: `${GB.purple}15`, color: GB.purple, border: `1px solid ${GB.purple}30`, borderRadius: 12, padding: "12px 16px", marginBottom: 20, display: "flex", alignItems: "center", gap: 10, fontSize: 14, fontWeight: 600 }}>
+            <span style={{ fontSize: 18 }}>👁️</span>
+            Your current role does not have permission to edit this page. Any information here is for viewing purposes only.
+          </div>
+        )}
+
+        <div style={{ pointerEvents: isEditable ? 'auto' : 'none', opacity: isEditable ? 1 : 0.95 }}>
+          {/* STEP 0: ENROLLMENT */}
+          {step === 0 && <>
           <SectionCard icon="🦋" title="Patient Enrollment Form">
             <div className="grid-2">
               <Field label="Date of Diagnosis" value={form.dateOfDiagnosis} onChange={v => upd("dateOfDiagnosis", v)} type="date" />
@@ -1279,6 +1376,7 @@ export default function GBApp() {
             </div>
           </SectionCard>
         </>}
+        </div>
 
         {/* Navigation */}
         <div className="no-print" style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginTop: 24, gap: 12 }}>
